@@ -261,7 +261,40 @@
             <v-progress-circular v-if="folderLoading" indeterminate size="20" color="secondary" />
           </div>
         </v-card-subtitle>
+        <div
+          v-if="folderBreadcrumbs.length"
+          class="px-4 pt-2"
+          style="overflow-x: auto; white-space: nowrap"
+        >
+          <div class="d-flex align-center ga-1">
+            <v-btn
+              size="x-small"
+              variant="text"
+              color="secondary"
+              :disabled="folderLoading"
+              @click="folderNavigateBreadcrumb('')"
+            >
+              /
+            </v-btn>
 
+            <template
+              v-for="(crumb, index) in folderBreadcrumbs"
+              :key="crumb.relative"
+            >
+              <v-icon size="14">mdi-chevron-right</v-icon>
+
+              <v-btn
+                size="x-small"
+                variant="text"
+                color="secondary"
+                :disabled="folderLoading || index === folderBreadcrumbs.length - 1"
+                @click="folderNavigateBreadcrumb(crumb.relative)"
+              >
+                {{ crumb.name }}
+              </v-btn>
+            </template>
+          </div>
+        </div>
         <v-card-text class="pt-2" style="min-height: 300px; max-height: 60vh; overflow-y: auto">
           <v-table density="compact">
             <thead>
@@ -282,7 +315,7 @@
                 v-for="item in folderItems"
                 :key="item.relative"
                 class="cursor-pointer"
-                @dblclick.stop.prevent="folderNavigateInto(item)"
+                @click.stop.prevent="folderNavigateInto(item)"
               >
                 <td>
                   <div class="d-flex align-center ga-2">
@@ -327,7 +360,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
 
 const PLUGIN_NAME = 'disk-mover';
 
@@ -349,6 +382,18 @@ const folderCurrentDisplay = ref('/');
 const folderParentRelative = ref('');
 const folderItems = ref([]);
 const folderLoading = ref(false);
+
+const folderBreadcrumbs = computed(() => {
+  const relative = folderCurrentRelative.value || '';
+  if (!relative) return [];
+
+  const parts = relative.split('/').filter(Boolean);
+
+  return parts.map((name, index) => ({
+    name,
+    relative: parts.slice(0, index + 1).join('/'),
+  }));
+});
 
 const status = reactive({ running: false, state: 'idle', percent: 0 });
 
@@ -501,6 +546,10 @@ const folderNavigateUp = () => {
 
 const folderGoRoot = () => {
   fetchFolders('');
+};
+
+const folderNavigateBreadcrumb = (relative) => {
+  fetchFolders(relative || '');
 };
 
 const selectCurrentFolder = () => {
