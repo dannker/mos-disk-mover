@@ -1,0 +1,123 @@
+#!/bin/bash
+set -euo pipefail
+
+PLG_DIR="/boot/optional/plugins/disk-mover"
+PID_FILE="/var/run/mos-disk-mover.pid"
+
+json_error() {
+  jq -cn --arg msg "$1" '{success:false,error:$msg}'
+}
+
+is_physical_member() {
+  local path="${1:-}"
+
+  [[ "$path" =~ ^/var/mergerfs/[^/]+/[^/]+$ ]] || return 1
+
+  local target
+  target=$(findmnt -rn -T "$path" -o TARGET 2>/dev/null || true)
+  [ "$target" = "$path" ]
+}
+
+list_disks() {
+  findmnt -J -o TARGET,SOURCE,FSTYPE | jq '
+    [
+      .filesystems[]
+      | select(.target? != null)
+      | select(.target | test("^/var/mergerfs/[^/]+/[^/]+$"))
+      | (.target | split("/")) as $parts
+      | {
+          pool: $parts[3],
+          disk: $parts[4],
+          path: .target,
+          source: .source,
+          fstype: .fstype,
+          title: ($parts[3] + " / " + $parts[4]),
+          value: .target
+        }
+    ]
+    | sort_by(.pool, .disk)
+    | {success:true, items:.}
+  '
+}
+
+status_json() {
+  if [ -f "$PID_FILE" ] ; then
+    local pid
+    pid=$(cat "$PID_FILE" 2>/dev/null || true)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null ; then
+      jq -cn --argjson pid "$pid" \
+        '{running:true,state:"running",percent:0,pid:$pid}'
+      return 0
+    fi
+  fi
+
+  jq -cn '{running:false,state:"idle",percent:0}'
+}
+
+cmd="${1:-help}"
+
+case "$cmd" in
+  disks)
+    list_disks
+  ;;
+
+  validate)
+    SRC="${2:-}"
+    DST="${3:-}"
+
+    if [ -z "$SRC" ] || [ -z "$DST" ] ; then
+      json_error "source and destination are required"
+      exit 2
+    fi
+
+    if [ "$SRC" = "$DST" ] ; then
+      json_error "source and destination must be different"
+      exit 2
+    fi
+
+    if ! is_physical_member "$SRC" ; then
+      json_error "source is not a physical MOS pool member mount point"
+      exit 2
+    fi
+
+    if ! is_physical_member "$DST" ; then
+      json_error "destination is not a physical MOS pool member mount point"
+      exit 2
+    fi
+
+    jq -cn --arg source "$SRC" --arg destination "$DST" \
+      '{success:true,valid:true,source:$source,destination:$destination}'
+  ;;
+
+  status)
+    status_json
+  ;;
+
+  dry-run|start|copy|move)
+    json_error "data movement is intentionally disabled in v0.2"
+    exit 3
+  ;;
+
+  cancel)
+    json_error "no active mover job in v0.2"
+    exit 3
+  ;;
+
+  *)
+    cat <<'EOF'
+MOS Disk Mover v0.2 scaffold
+
+Commands:
+  disks
+  validate SOURCE DESTINATION
+  status
+
+Disabled in this version:
+  dry-run
+  start
+  copy
+  move
+  cancel
+EOF
+  ;;
+esac

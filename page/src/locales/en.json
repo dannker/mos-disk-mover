@@ -1,0 +1,22 @@
+{
+  "plugin_disk_mover": {
+    "title": "Disk Mover",
+    "status": "Status",
+    "idle": "Idle",
+    "running": "Running",
+    "source": "Source disk",
+    "destination": "Destination disk",
+    "refresh": "Refresh disks",
+    "validate": "Validate selection",
+    "save": "Save settings",
+    "move": "Move",
+    "copy": "Copy",
+    "verify": "Verify before deleting source",
+    "preserve_xattrs": "Preserve extended attributes",
+    "preserve_acl": "Preserve ACLs",
+    "safe_notice": "v0.2 is read-only. Copy and move are intentionally disabled.",
+    "validation_ok": "Selection is valid.",
+    "validation_failed": "Selection is not valid.",
+    "no_disks": "No physical MOS pool members were detected."
+  }
+}

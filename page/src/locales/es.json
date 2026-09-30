@@ -1,0 +1,22 @@
+{
+  "plugin_disk_mover": {
+    "title": "Disk Mover",
+    "status": "Estado",
+    "idle": "En espera",
+    "running": "En ejecución",
+    "source": "Disco de origen",
+    "destination": "Disco de destino",
+    "refresh": "Actualizar discos",
+    "validate": "Validar selección",
+    "save": "Guardar ajustes",
+    "move": "Mover",
+    "copy": "Copiar",
+    "verify": "Verificar antes de borrar el origen",
+    "preserve_xattrs": "Conservar atributos extendidos",
+    "preserve_acl": "Conservar ACL",
+    "safe_notice": "La v0.2 es de solo lectura. Copiar y mover están desactivados intencionadamente.",
+    "validation_ok": "La selección es válida.",
+    "validation_failed": "La selección no es válida.",
+    "no_disks": "No se han detectado miembros físicos de pools MOS."
+  }
+}
