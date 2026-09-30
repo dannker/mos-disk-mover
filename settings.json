@@ -3,5 +3,7 @@
   "preserve_xattrs": true,
   "preserve_acl": true,
   "last_source": "",
-  "last_destination": ""
+  "source_folder": "",
+  "last_destination": "",
+  "destination_base": ""
 }

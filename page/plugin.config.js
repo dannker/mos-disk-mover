@@ -2,8 +2,8 @@ export default {
   name: 'disk-mover',
   displayName: 'Disk Mover',
   description: 'Safely move or copy data between physical MOS pool members',
-  version: '0.2.0',
+  version: '0.3.0',
   icon: '',
-  author: 'Dani',
-  homepage: '',
+  author: 'Dannker',
+  homepage: 'https://github.com/dannker/mos-disk-mover',
 };

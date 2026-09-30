@@ -8,14 +8,134 @@ json_error() {
   jq -cn --arg msg "$1" '{success:false,error:$msg}'
 }
 
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    json_error "required command not found: $1"
+    exit 4
+  }
+}
+
+mount_source() {
+  findmnt -rn -T "$1" -o SOURCE 2>/dev/null || true
+}
+
 is_physical_member() {
   local path="${1:-}"
-
   [[ "$path" =~ ^/var/mergerfs/[^/]+/[^/]+$ ]] || return 1
 
   local target
   target=$(findmnt -rn -T "$path" -o TARGET 2>/dev/null || true)
   [ "$target" = "$path" ]
+}
+
+normalize_relative() {
+  local rel="${1:-}"
+  case "$rel" in
+    ""|"/"|".") printf '%s' "" ;;
+    /*) printf '%s' "${rel#/}" ;;
+    *) printf '%s' "$rel" ;;
+  esac
+}
+
+resolve_member_dir() {
+  local base="${1:-}"
+  local rel
+  rel=$(normalize_relative "${2:-}")
+
+  is_physical_member "$base" || return 2
+
+  local base_real candidate
+  base_real=$(realpath -e -- "$base" 2>/dev/null) || return 2
+
+  if [ -z "$rel" ] ; then
+    candidate="$base_real"
+  else
+    candidate=$(realpath -e -- "$base/$rel" 2>/dev/null) || return 2
+  fi
+
+  [ -d "$candidate" ] || return 2
+
+  case "$candidate" in
+    "$base_real"|"$base_real"/*) printf '%s' "$candidate" ;;
+    *) return 2 ;;
+  esac
+}
+
+relative_from_base() {
+  local base="${1:-}"
+  local absolute="${2:-}"
+  local base_real
+  base_real=$(realpath -e -- "$base")
+
+  if [ "$absolute" = "$base_real" ] ; then
+    printf '%s' ""
+  else
+    printf '%s' "${absolute#"$base_real"/}"
+  fi
+}
+
+join_relative() {
+  local left
+  local right
+  left=$(normalize_relative "${1:-}")
+  right=$(normalize_relative "${2:-}")
+
+  if [ -z "$left" ] ; then
+    printf '%s' "$right"
+  elif [ -z "$right" ] ; then
+    printf '%s' "$left"
+  else
+    printf '%s/%s' "$left" "$right"
+  fi
+}
+
+validate_selection() {
+  local src_disk="${1:-}"
+  local src_folder="${2:-}"
+  local dst_disk="${3:-}"
+  local dst_base="${4:-}"
+
+  [ -n "$src_disk" ] && [ -n "$dst_disk" ] || {
+    json_error "source and destination disks are required"
+    return 2
+  }
+
+  [ "$src_disk" != "$dst_disk" ] || {
+    json_error "source and destination disks must be different"
+    return 2
+  }
+
+  is_physical_member "$src_disk" || {
+    json_error "source is not a physical MOS pool member mount point"
+    return 2
+  }
+
+  is_physical_member "$dst_disk" || {
+    json_error "destination is not a physical MOS pool member mount point"
+    return 2
+  }
+
+  local src_device dst_device
+  src_device=$(mount_source "$src_disk")
+  dst_device=$(mount_source "$dst_disk")
+
+  if [ -n "$src_device" ] && [ "$src_device" = "$dst_device" ] ; then
+    json_error "source and destination resolve to the same mounted device"
+    return 2
+  fi
+
+  local src_path dst_base_path
+  src_path=$(resolve_member_dir "$src_disk" "$src_folder") || {
+    json_error "source folder is invalid or escapes the selected source disk"
+    return 2
+  }
+
+  dst_base_path=$(resolve_member_dir "$dst_disk" "$dst_base") || {
+    json_error "destination base is invalid or escapes the selected destination disk"
+    return 2
+  }
+
+  return 0
 }
 
 list_disks() {
@@ -41,18 +161,268 @@ list_disks() {
   '
 }
 
+list_folders() {
+  local base="${1:-}"
+  local requested_rel="${2:-}"
+
+  require_command jq
+  require_command realpath
+  require_command find
+
+  is_physical_member "$base" || {
+    json_error "disk is not a physical MOS pool member mount point"
+    return 2
+  }
+
+  local current
+  current=$(resolve_member_dir "$base" "$requested_rel") || {
+    json_error "folder is invalid or escapes the selected disk"
+    return 2
+  }
+
+  local current_rel parent_rel
+  current_rel=$(relative_from_base "$base" "$current")
+
+  if [ -z "$current_rel" ] ; then
+    parent_rel=""
+  else
+    parent_rel=$(dirname -- "$current_rel")
+    [ "$parent_rel" = "." ] && parent_rel=""
+  fi
+
+  local items='[]'
+  local child child_real child_rel name item base_real
+  base_real=$(realpath -e -- "$base")
+
+  while IFS= read -r -d '' child ; do
+    child_real=$(realpath -e -- "$child" 2>/dev/null || true)
+    [ -n "$child_real" ] || continue
+
+    case "$child_real" in
+      "$base_real"/*) ;;
+      *) continue ;;
+    esac
+
+    child_rel=$(relative_from_base "$base" "$child_real")
+    name=$(basename -- "$child_real")
+
+    item=$(jq -cn \
+      --arg name "$name" \
+      --arg relative "$child_rel" \
+      --arg display "/$child_rel" \
+      '{name:$name,relative:$relative,display:$display}')
+
+    items=$(jq -cn \
+      --argjson items "$items" \
+      --argjson item "$item" \
+      '$items + [$item]')
+  done < <(find "$current" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+
+  jq -cn \
+    --arg disk "$base" \
+    --arg current_relative "$current_rel" \
+    --arg current_display "${current_rel:+/$current_rel}" \
+    --arg parent_relative "$parent_rel" \
+    --argjson items "$items" \
+    '{
+      success:true,
+      disk:$disk,
+      current_relative:$current_relative,
+      current_display:(if $current_relative == "" then "/" else $current_display end),
+      parent_relative:$parent_relative,
+      items:($items | sort_by(.name | ascii_downcase))
+    }'
+}
+
 status_json() {
   if [ -f "$PID_FILE" ] ; then
     local pid
     pid=$(cat "$PID_FILE" 2>/dev/null || true)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null ; then
-      jq -cn --argjson pid "$pid" \
-        '{running:true,state:"running",percent:0,pid:$pid}'
+      jq -cn --argjson pid "$pid" '{running:true,state:"running",percent:0,pid:$pid}'
       return 0
     fi
   fi
 
   jq -cn '{running:false,state:"idle",percent:0}'
+}
+
+stat_number() {
+  local output="$1"
+  local label="$2"
+
+  printf '%s\n' "$output" \
+    | awk -F': ' -v label="$label" '$1 == label { print $2; exit }' \
+    | sed -E 's/,//g; s/ bytes.*$//; s/ .*$//' \
+    | tr -cd '0-9'
+}
+
+directories_to_create_json() {
+  local dst_base_path="$1"
+  local canonical_src_rel="$2"
+
+  local current="$dst_base_path"
+  local result='[]'
+  local IFS='/'
+  read -r -a parts <<< "$canonical_src_rel"
+
+  local part
+  for part in "${parts[@]}"; do
+    [ -n "$part" ] || continue
+    current="$current/$part"
+    if [ ! -d "$current" ] ; then
+      result=$(jq -cn --argjson arr "$result" --arg p "$current" '$arr + [$p]')
+    fi
+  done
+
+  printf '%s' "$result"
+}
+
+dry_run() {
+  local src_disk="${1:-}"
+  local src_folder="${2:-}"
+  local dst_disk="${3:-}"
+  local dst_base="${4:-}"
+  local preserve_xattrs="${5:-1}"
+  local preserve_acl="${6:-1}"
+
+  require_command rsync
+  require_command jq
+  require_command findmnt
+  require_command df
+  require_command realpath
+
+  local validation_file="/tmp/mos-disk-mover-validate.$$"
+  if ! validate_selection "$src_disk" "$src_folder" "$dst_disk" "$dst_base" >"$validation_file" 2>&1 ; then
+    cat "$validation_file"
+    rm -f "$validation_file"
+    return 2
+  fi
+  rm -f "$validation_file"
+
+  local src_path dst_base_path canonical_src_rel canonical_dst_base_rel
+  src_path=$(resolve_member_dir "$src_disk" "$src_folder")
+  dst_base_path=$(resolve_member_dir "$dst_disk" "$dst_base")
+  canonical_src_rel=$(relative_from_base "$src_disk" "$src_path")
+  canonical_dst_base_rel=$(relative_from_base "$dst_disk" "$dst_base_path")
+
+  # Destination preserves the source folder path below the chosen destination base.
+  local resolved_rel resolved_destination
+  resolved_rel=$(join_relative "$canonical_dst_base_rel" "$canonical_src_rel")
+  if [ -z "$resolved_rel" ] ; then
+    resolved_destination=$(realpath -e -- "$dst_disk")
+  else
+    resolved_destination="$(realpath -e -- "$dst_disk")/$resolved_rel"
+  fi
+
+  local dirs_json
+  dirs_json=$(directories_to_create_json "$dst_base_path" "$canonical_src_rel")
+
+  local -a args
+  args=(-a -H -n -R --numeric-ids --stats)
+
+  if [ "$preserve_acl" = "1" ] || [ "$preserve_acl" = "true" ] ; then
+    args+=(-A)
+  fi
+
+  if [ "$preserve_xattrs" = "1" ] || [ "$preserve_xattrs" = "true" ] ; then
+    args+=(-X)
+  fi
+
+  local started ended duration output rc
+  started=$(date +%s)
+
+  # --relative preserves the source path below the physical disk root.
+  # ./ ensures no parent path above the disk root can be recreated.
+  local source_arg
+  if [ -z "$canonical_src_rel" ] ; then
+    source_arg="./"
+  else
+    source_arg="./$canonical_src_rel/"
+  fi
+
+  set +e
+  output=$(
+    cd "$src_disk" &&
+    LC_ALL=C rsync "${args[@]}" -- "$source_arg" "$dst_base_path/" 2>&1
+  )
+  rc=$?
+  set -e
+
+  ended=$(date +%s)
+  duration=$((ended - started))
+
+  if [ "$rc" -ne 0 ] ; then
+    jq -cn \
+      --argjson exit_code "$rc" \
+      --arg error "rsync dry-run failed" \
+      --arg details "$output" \
+      '{success:false,error:$error,exit_code:$exit_code,details:$details}'
+    return "$rc"
+  fi
+
+  local files_total files_created files_transferred total_size transfer_size dest_free
+  files_total=$(stat_number "$output" "Number of files")
+  files_created=$(stat_number "$output" "Number of created files")
+  files_transferred=$(stat_number "$output" "Number of regular files transferred")
+  total_size=$(stat_number "$output" "Total file size")
+  transfer_size=$(stat_number "$output" "Total transferred file size")
+  dest_free=$(df -B1 --output=avail "$dst_base_path" | tail -n 1 | tr -cd '0-9')
+
+  files_total=${files_total:-0}
+  files_created=${files_created:-0}
+  files_transferred=${files_transferred:-0}
+  total_size=${total_size:-0}
+  transfer_size=${transfer_size:-0}
+  dest_free=${dest_free:-0}
+
+  local enough_space="false"
+  if [ "$transfer_size" -le "$dest_free" ] ; then
+    enough_space="true"
+  fi
+
+  jq -cn \
+    --arg source_disk "$src_disk" \
+    --arg source_folder "$canonical_src_rel" \
+    --arg source_path "$src_path" \
+    --arg destination_disk "$dst_disk" \
+    --arg destination_base "$canonical_dst_base_rel" \
+    --arg destination_base_path "$dst_base_path" \
+    --arg resolved_destination "$resolved_destination" \
+    --arg source_device "$(mount_source "$src_disk")" \
+    --arg destination_device "$(mount_source "$dst_disk")" \
+    --argjson directories_to_create "$dirs_json" \
+    --argjson files_total "$files_total" \
+    --argjson files_created "$files_created" \
+    --argjson files_to_transfer "$files_transferred" \
+    --argjson total_size "$total_size" \
+    --argjson transfer_size "$transfer_size" \
+    --argjson destination_free "$dest_free" \
+    --argjson enough_space "$enough_space" \
+    --argjson duration_seconds "$duration" \
+    '{
+      success:true,
+      dry_run:true,
+      source_disk:$source_disk,
+      source_folder:$source_folder,
+      source_path:$source_path,
+      destination_disk:$destination_disk,
+      destination_base:$destination_base,
+      destination_base_path:$destination_base_path,
+      resolved_destination:$resolved_destination,
+      source_device:$source_device,
+      destination_device:$destination_device,
+      directories_to_create:$directories_to_create,
+      files_total:$files_total,
+      files_created:$files_created,
+      files_to_transfer:$files_to_transfer,
+      total_size:$total_size,
+      transfer_size:$transfer_size,
+      destination_free:$destination_free,
+      enough_space:$enough_space,
+      duration_seconds:$duration_seconds,
+      modified:false
+    }'
 }
 
 cmd="${1:-help}"
@@ -62,59 +432,98 @@ case "$cmd" in
     list_disks
   ;;
 
+  folders)
+    list_folders "${2:-}" "${3:-}"
+  ;;
+
   validate)
-    SRC="${2:-}"
-    DST="${3:-}"
+    SRC_DISK="${2:-}"
+    SRC_FOLDER="${3:-}"
+    DST_DISK="${4:-}"
+    DST_BASE="${5:-}"
 
-    if [ -z "$SRC" ] || [ -z "$DST" ] ; then
-      json_error "source and destination are required"
+    validation_file="/tmp/mos-disk-mover-validate.$$"
+    if ! validate_selection "$SRC_DISK" "$SRC_FOLDER" "$DST_DISK" "$DST_BASE" >"$validation_file" 2>&1 ; then
+      cat "$validation_file"
+      rm -f "$validation_file"
       exit 2
     fi
+    rm -f "$validation_file"
 
-    if [ "$SRC" = "$DST" ] ; then
-      json_error "source and destination must be different"
-      exit 2
+    SRC_PATH=$(resolve_member_dir "$SRC_DISK" "$SRC_FOLDER")
+    DST_BASE_PATH=$(resolve_member_dir "$DST_DISK" "$DST_BASE")
+    CANONICAL_SRC_REL=$(relative_from_base "$SRC_DISK" "$SRC_PATH")
+    CANONICAL_DST_BASE_REL=$(relative_from_base "$DST_DISK" "$DST_BASE_PATH")
+    RESOLVED_REL=$(join_relative "$CANONICAL_DST_BASE_REL" "$CANONICAL_SRC_REL")
+
+    if [ -z "$RESOLVED_REL" ] ; then
+      RESOLVED_DESTINATION=$(realpath -e -- "$DST_DISK")
+    else
+      RESOLVED_DESTINATION="$(realpath -e -- "$DST_DISK")/$RESOLVED_REL"
     fi
 
-    if ! is_physical_member "$SRC" ; then
-      json_error "source is not a physical MOS pool member mount point"
-      exit 2
-    fi
+    jq -cn \
+      --arg source_disk "$SRC_DISK" \
+      --arg source_folder "$CANONICAL_SRC_REL" \
+      --arg source_path "$SRC_PATH" \
+      --arg destination_disk "$DST_DISK" \
+      --arg destination_base "$CANONICAL_DST_BASE_REL" \
+      --arg destination_base_path "$DST_BASE_PATH" \
+      --arg resolved_destination "$RESOLVED_DESTINATION" \
+      --arg source_device "$(mount_source "$SRC_DISK")" \
+      --arg destination_device "$(mount_source "$DST_DISK")" \
+      '{
+        success:true,
+        valid:true,
+        source_disk:$source_disk,
+        source_folder:$source_folder,
+        source_path:$source_path,
+        destination_disk:$destination_disk,
+        destination_base:$destination_base,
+        destination_base_path:$destination_base_path,
+        resolved_destination:$resolved_destination,
+        source_device:$source_device,
+        destination_device:$destination_device
+      }'
+  ;;
 
-    if ! is_physical_member "$DST" ; then
-      json_error "destination is not a physical MOS pool member mount point"
-      exit 2
-    fi
-
-    jq -cn --arg source "$SRC" --arg destination "$DST" \
-      '{success:true,valid:true,source:$source,destination:$destination}'
+  dry-run)
+    dry_run "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-1}"
   ;;
 
   status)
     status_json
   ;;
 
-  dry-run|start|copy|move)
-    json_error "data movement is intentionally disabled in v0.2"
+  start|copy|move)
+    json_error "COPY and MOVE are intentionally disabled in v0.3"
     exit 3
   ;;
 
   cancel)
-    json_error "no active mover job in v0.2"
+    json_error "no active mover job in v0.3"
     exit 3
   ;;
 
   *)
     cat <<'EOF'
-MOS Disk Mover v0.2 scaffold
+MOS Disk Mover v0.3
 
 Commands:
   disks
-  validate SOURCE DESTINATION
+  folders DISK [RELATIVE_FOLDER]
+  validate SOURCE_DISK SOURCE_FOLDER DEST_DISK DESTINATION_BASE
+  dry-run SOURCE_DISK SOURCE_FOLDER DEST_DISK DESTINATION_BASE [PRESERVE_XATTRS=1] [PRESERVE_ACL=1]
   status
 
-Disabled in this version:
-  dry-run
+Semantics:
+  SOURCE_FOLDER "/" means the complete source disk.
+  DESTINATION_BASE is an existing folder on the destination disk.
+  The source folder path is preserved below DESTINATION_BASE.
+  Missing destination directories are created by future COPY/MOVE operations.
+  v0.3 only simulates this behavior and never writes data.
+
+Disabled:
   start
   copy
   move

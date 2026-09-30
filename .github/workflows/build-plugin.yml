@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '0.2.0'
+        description: '0.3.0'
         required: true
-        default: '0.2.0'
+        default: '0.3.0'
 
 jobs:
   build:
@@ -65,7 +65,7 @@ jobs:
           Package: disk-mover-plugin
           Version: ${VERSION}-1+mos-plugin
           Architecture: all
-          Maintainer: Dani
+          Maintainer: Dannker
           Description: Disk Mover Plugin for MOS
           EOF
 
@@ -94,7 +94,7 @@ jobs:
           body: |
             ## MOS Disk Mover ${{ steps.version.outputs.VERSION }}
 
-            Experimental read-only scaffold. COPY/MOVE remain disabled.
+            v0.3 adds safe folder browsing and rsync dry-run transfer simulation. COPY/MOVE remain disabled.
           files: |
             disk-mover-${{ steps.version.outputs.VERSION }}-1+mos-plugin_all.deb
             disk-mover-${{ steps.version.outputs.VERSION }}-1+mos-plugin_all.deb.md5
