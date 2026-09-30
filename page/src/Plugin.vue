@@ -441,6 +441,19 @@ const pluginQuery = async (args, timeout = 10) => {
   return data;
 };
 
+const encodePathArg = (value) => {
+  if (!value) return '';
+
+  const bytes = new TextEncoder().encode(value);
+  let hex = '';
+
+  for (const byte of bytes) {
+    hex += byte.toString(16).padStart(2, '0');
+  }
+
+  return `xhex_${hex}`;
+};
+
 const displayFolder = (relative) =>
   relative ? `/${relative}` : '/';
 
@@ -518,8 +531,8 @@ const fetchFolders = async (relative = '') => {
   try {
     const data = await pluginQuery([
       'folders',
-      folderDisk.value,
-      relative || '',
+      encodePathArg(folderDisk.value),
+      encodePathArg(relative || ''),
     ], 30);
 
     const output = data?.output || {};
@@ -573,10 +586,10 @@ const validateSelection = async () => {
   try {
     const data = await pluginQuery([
       'validate',
-      settings.last_source,
-      settings.source_folder || '',
-      settings.last_destination,
-      settings.destination_base || '',
+      encodePathArg(settings.last_source),
+      encodePathArg(settings.source_folder || ''),
+      encodePathArg(settings.last_destination),
+      encodePathArg(settings.destination_base || ''),
     ], 30);
 
     validationOk.value = data?.output?.valid === true;
@@ -603,10 +616,10 @@ const simulateTransfer = async () => {
   try {
     const data = await pluginQuery([
       'dry-run',
-      settings.last_source,
-      settings.source_folder || '',
-      settings.last_destination,
-      settings.destination_base || '',
+      encodePathArg(settings.last_source),
+      encodePathArg(settings.source_folder || ''),
+      encodePathArg(settings.last_destination),
+      encodePathArg(settings.destination_base || ''),
       settings.preserve_xattrs ? '1' : '0',
       settings.preserve_acl ? '1' : '0',
     ], 1800);

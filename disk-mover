@@ -37,6 +37,32 @@ normalize_relative() {
   esac
 }
 
+decode_path_arg() {
+  local value="${1:-}"
+
+  case "$value" in
+    xhex_*)
+      local hex="${value#xhex_}"
+      [ -z "$hex" ] && { printf '%s' ''; return 0; }
+
+      [[ "$hex" =~ ^([0-9A-Fa-f]{2})+$ ]] || return 2
+
+      local decoded='' i byte
+      for ((i=0; i<${#hex}; i+=2)); do
+        byte="${hex:i:2}"
+        printf -v byte '%b' "\\x$byte"
+        decoded+="$byte"
+      done
+
+      printf '%s' "$decoded"
+      ;;
+    *)
+      # Keep direct CLI usage backwards compatible.
+      printf '%s' "$value"
+      ;;
+  esac
+}
+
 resolve_member_dir() {
   local base="${1:-}"
   local rel
@@ -433,14 +459,34 @@ case "$cmd" in
   ;;
 
   folders)
-    list_folders "${2:-}" "${3:-}"
+    FOLDER_DISK=$(decode_path_arg "${2:-}") || {
+      json_error "invalid encoded disk argument"
+      exit 2
+    }
+    FOLDER_REL=$(decode_path_arg "${3:-}") || {
+      json_error "invalid encoded folder argument"
+      exit 2
+    }
+    list_folders "$FOLDER_DISK" "$FOLDER_REL"
   ;;
 
   validate)
-    SRC_DISK="${2:-}"
-    SRC_FOLDER="${3:-}"
-    DST_DISK="${4:-}"
-    DST_BASE="${5:-}"
+    SRC_DISK=$(decode_path_arg "${2:-}") || {
+      json_error "invalid encoded source disk argument"
+      exit 2
+    }
+    SRC_FOLDER=$(decode_path_arg "${3:-}") || {
+      json_error "invalid encoded source folder argument"
+      exit 2
+    }
+    DST_DISK=$(decode_path_arg "${4:-}") || {
+      json_error "invalid encoded destination disk argument"
+      exit 2
+    }
+    DST_BASE=$(decode_path_arg "${5:-}") || {
+      json_error "invalid encoded destination base argument"
+      exit 2
+    }
 
     validation_file="/tmp/mos-disk-mover-validate.$$"
     if ! validate_selection "$SRC_DISK" "$SRC_FOLDER" "$DST_DISK" "$DST_BASE" >"$validation_file" 2>&1 ; then
@@ -488,7 +534,24 @@ case "$cmd" in
   ;;
 
   dry-run)
-    dry_run "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-1}"
+    SRC_DISK=$(decode_path_arg "${2:-}") || {
+      json_error "invalid encoded source disk argument"
+      exit 2
+    }
+    SRC_FOLDER=$(decode_path_arg "${3:-}") || {
+      json_error "invalid encoded source folder argument"
+      exit 2
+    }
+    DST_DISK=$(decode_path_arg "${4:-}") || {
+      json_error "invalid encoded destination disk argument"
+      exit 2
+    }
+    DST_BASE=$(decode_path_arg "${5:-}") || {
+      json_error "invalid encoded destination base argument"
+      exit 2
+    }
+
+    dry_run       "$SRC_DISK"       "$SRC_FOLDER"       "$DST_DISK"       "$DST_BASE"       "${6:-1}"       "${7:-1}"
   ;;
 
   status)
