@@ -21,7 +21,8 @@ is_physical_member() {
 list_disks() {
   findmnt -J -o TARGET,SOURCE,FSTYPE | jq '
     [
-      .filesystems[]
+      ..
+      | objects
       | select(.target? != null)
       | select(.target | test("^/var/mergerfs/[^/]+/[^/]+$"))
       | (.target | split("/")) as $parts
